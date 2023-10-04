@@ -1,0 +1,334 @@
+---
+title: "Data Science Jobs Dashboard"
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: columns
+runtime: shiny
+---
+
+```{r setup, include = FALSE}
+library(flexdashboard)
+```
+
+
+```{r}
+#| label: load-packages-data
+
+# load packages
+library(tidyverse)
+library(ggpattern)
+library(shiny)
+library(sf)
+library(plotly)
+
+# load data
+ds_salaries <- read_csv('data/ds_salaries.csv') %>% 
+  mutate(salary_thousands = salary_in_usd/1000)
+world <- read_sf('data/world.shp')
+```
+
+# Salary Distributions
+
+## Column {.sidebar}
+
+```{r}
+# sidebar layout
+helpText(HTML('<b>Source:</b> <a href="https://www.kaggle.com/datasets/arnabchaki/data-science-salaries-2023">Kaggle</a><br><br><br>'))
+selectizeInput('jobs',
+               'Select Job Title(s):',
+               sort(unique(ds_salaries$job_title)),
+               multiple = TRUE)
+helpText(HTML('Select one or multiple job titles to view salary distribution(s).<br><br>'))
+selectInput('plot_type',
+            'Select Plot Type:',
+            c('Box Plot' = 'box',
+              'Density Plot' = 'density'))
+helpText('Select plot type to visualize distribution(s).')
+uiOutput('box_info')
+```
+
+## Column
+
+### 
+
+```{r}
+# server logic for conditional help text
+output$box_info <- renderUI({
+  if ((input$plot_type == 'box') & (length(input$jobs) > 1)){
+  helpText(strong('Note: the width of each boxplot corresponds to the number of positions.'))
+  }
+})
+
+# plot
+renderPlot({
+  
+  if (length(input$jobs) == 0){
+    if (input$plot_type == 'box'){
+      # box plot for all jobs
+      ds_salaries %>%
+        ggplot(aes(y = salary_thousands)) +
+        geom_boxplot_pattern(pattern = 'gradient') +
+        scale_x_continuous(labels = NULL,
+                           breaks = NULL) +
+        theme_minimal() +
+        theme(axis.title.x = element_blank(),
+              axis.title.y = element_text(size = 18),
+              axis.text = element_text(size = 14)) +
+        labs(x = NULL,
+             y = 'Salary (Thousands USD)')
+    } else{
+      # density plot for all jobs
+        ds_salaries %>% 
+          ggplot(aes(salary_thousands)) +
+          geom_density_pattern(pattern = 'gradient') +
+          scale_y_continuous(breaks = NULL,
+                             expand = c(0,0)) +
+          theme_minimal() +
+          theme(axis.title.x = element_text(size = 18,
+                                            vjust = -1),
+                axis.title.y = element_blank(),
+                axis.text = element_text(size = 14)) +
+          labs(x = 'Salary (Thousands USD)',
+               y = NULL)
+        
+    }
+  } else{
+      if (input$plot_type == 'box'){
+        # box plot for selected jobs
+        base <- ds_salaries %>% 
+          filter(job_title %in% input$jobs) %>%
+          ggplot(aes(job_title,
+                     salary_thousands,
+                     fill = job_title)) +
+          geom_boxplot(varwidth = TRUE,
+                       alpha = 0.5) +
+          theme_minimal() +
+          theme(axis.text = element_text(size = 14),
+                axis.text.x = element_text(vjust = 1.5),
+                axis.title = element_text(size = 18),
+                text = element_text(family = 'sans'),
+                legend.position = 'none',) +
+          labs(x = 'Job Title',
+               y = 'Salary (Thousands USD)')
+        if (length(input$jobs) > 5){
+          base +
+            theme(axis.text.x = element_text(angle = -45))
+        } else {
+          base
+        }
+      }
+      else{
+        # density plot for selected jobs
+        ds_salaries %>% 
+          filter(job_title %in% input$jobs) %>%
+          ggplot(aes(salary_thousands,
+                     fill = job_title,
+                     color = job_title)) +
+          geom_density(alpha = 0.5) +
+          scale_y_continuous(breaks = NULL) +
+          theme_minimal() +
+          theme(axis.text.x = element_text(size = 14),
+                axis.text.y = element_blank(),
+                axis.title.x = element_text(size = 18),
+                legend.title = element_text(size = 18),
+                legend.text = element_text(size = 14),
+                text = element_text(family = 'sans'),
+                legend.key.size = unit(1.2, 'cm'),
+                legend.position = c(0.81, 0.8)) +
+          labs(x = 'Salary (Thousands USD)',
+               y = NULL,
+               fill = 'Job Title',
+               color = 'Job Title')
+      }
+  }
+  
+})
+```
+
+
+# Median Salary by Experience Level
+
+## Column {.sidebar}
+
+```{r}
+# sidebar layout
+helpText(HTML('<b>Source:</b> <a href="https://www.kaggle.com/datasets/arnabchaki/data-science-salaries-2023">Kaggle</a><br><br><br>'))
+selectizeInput('exp_jobs',
+               'Select Job Title(s):',
+               sort(unique(ds_salaries$job_title)),
+               multiple = TRUE)
+helpText(HTML('Select one or multiple job titles to compare median salaries across experience levels.<br>'))
+uiOutput('hover_info')
+```
+
+## Column
+
+### 
+
+```{r}
+# server logic for conditional help text
+output$hover_info <- renderUI({
+  if (is.null(input$exp_jobs)){
+    helpText('Hover over bars to view median salary and number of positions.')
+  } else {
+    helpText('Hover over bars to view job title, median salary, and number of positions.')
+  }
+})
+
+# data wrangle
+experience_names <- c('EN' = 'Entry Level',
+                     'EX' = 'Executive',
+                     'SE' = 'Senior',
+                     'MI' = 'Mid-level')
+
+ds_salaries$experience_level <- unlist(lapply(ds_salaries$experience_level,
+                                              function(x) experience_names[x]))
+
+experience_salary <- ds_salaries %>% 
+  group_by(experience_level) %>% 
+  summarize(salary = median(salary_in_usd),
+            count = n()) %>% 
+  ungroup()
+
+job_experience_salary <- ds_salaries %>% 
+  group_by(job_title,
+           experience_level) %>% 
+  summarize(salary = median(salary_in_usd),
+            count = n()) %>% 
+  ungroup() %>% 
+  mutate(experience_level = factor(experience_level,
+                            levels = c('Entry Level',
+                                       'Mid-level',
+                                       'Senior',
+                                       'Executive')))
+
+# plot
+renderPlotly({
+  # bar chart for all jobs
+  if (is.null(input$exp_jobs)){
+    general_bar <- experience_salary %>% 
+      mutate(experience_level = fct_inseq(as.factor(salary))) %>% 
+      ggplot(aes(as.factor(experience_level),
+                 salary/1000,
+                 text = paste('Median Salary:',
+                              formattable::currency(salary,
+                                                  digits = 0),
+                              '\nNumber of Positions:',
+                              format(count,
+                                     big.mark = ',')))) +
+      geom_col(fill = 'hotpink',
+               color = 'hotpink',
+               alpha = 0.4) +
+      scale_x_discrete(labels = c('Entry Level',
+                                  'Mid-level',
+                                  'Senior',
+                                  'Executive')) +
+      theme_minimal() +
+      theme(axis.text.x = element_text(size = 14),
+            axis.text.y = element_text(size = 12),
+            axis.title = element_text(size = 18),
+            panel.grid.major.x = element_blank(),
+            legend.position = 'none') +
+      labs(x = 'Experience Level',
+           y = 'Median Salary (Thousands USD)')
+    
+    ggplotly(general_bar,
+             tooltip = 'text')
+  } else {
+      # bar chart for selected jobs
+      jobs_bar <- job_experience_salary %>%
+        filter(job_title %in% input$exp_jobs) %>%
+        mutate(label = paste('Job Title:',
+                             job_title,
+                             '\nMedian Salary:',
+                             formattable::currency(round(salary),
+                                                   digits = 0),
+                             '\nNumber of Positions:',
+                             count)) %>% 
+        ggplot(aes(experience_level,
+                   salary/1000,
+                   fill = job_title,
+                   color = job_title,
+                   text = label)) +
+        geom_col(position = 'dodge',
+                 alpha = 0.6) +
+        scale_fill_brewer(palette = 'Set2') +
+        scale_color_brewer(palette = 'Set2') +
+        theme_minimal() +
+        theme(axis.text = element_text(size = 14),
+              axis.title = element_text(size = 18)) +
+        labs(x = 'Experience Level',
+             y = 'Median Salary (Thousands USD)',
+             fill = 'Job Title',
+             color = 'Job Title')
+      
+    ggplotly(jobs_bar,
+             tooltip = 'text')
+  }
+
+}) 
+```
+
+# Data Science Jobs Map
+
+## Row
+
+```{r}
+# sidebar layout
+helpText(HTML('<b>Data Source:</b> <a href="https://www.kaggle.com/datasets/arnabchaki/data-science-salaries-2023">Kaggle</a>'))
+helpText(HTML('<b>Shapefile Source:</b> <a href="https://hub.arcgis.com/datasets/esri::world-countries-generalized/explore">Esri (via ArcGIS)</a><br>'))
+helpText('Hover over countries to view country name, median salary, and number of positions.')
+```
+
+### 
+
+```{r}
+# data wrangle
+country_data <- ds_salaries %>% 
+    group_by(company_location) %>% 
+    summarize(salary = median(salary_in_usd),
+              count = n()) %>% 
+    ungroup() %>% 
+    rename(ISO = company_location)
+  
+world <- world %>% 
+  left_join(country_data,
+            by = 'ISO')
+
+world$salary_plot <- world$salary
+world$salary_plot[world$salary > 150000] <- 150000
+world$count[is.na(world$count)] <- 0
+
+# map
+renderPlotly({
+  map <- world %>%
+    filter(COUNTRY != 'Antarctica') %>% 
+    mutate(label = paste('Country:',
+                         COUNTRY,
+                         '\nMedian Salary:',
+                         formattable::currency(round(salary),
+                                               digits = 0),
+                         '\nNumber of Positions:',
+                         format(count,
+                                big.mark = ','))) %>% 
+    ggplot(aes(fill = salary_plot/1000,
+               text = label)) +
+    geom_sf(color = 'black',
+            linewidth = 0.2) +
+    scale_fill_gradient(low = 'yellow',
+                        high = 'red',
+                        limits = c(50, 150),
+                        na.value = 'white',
+                        breaks = seq(50, 150, 25),
+                        labels = c('<$50k',
+                                   '$75k',
+                                   '$100k',
+                                   '$125k',
+                                   '>$150k'),
+                        name = 'Median Salary (USD)') +
+    theme_void()
+  
+  ggplotly(map,
+           tooltip = 'text')
+})
+```
